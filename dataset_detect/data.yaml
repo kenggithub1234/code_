@@ -1,0 +1,6 @@
+path: C:\ProjectsCode\yolo_dataset_tool\dataset_detect
+train: images
+val: images
+
+nc: 3
+names: ['can', 'glass_bottle', 'plastic_bottle']

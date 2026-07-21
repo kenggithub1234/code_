@@ -1,0 +1,13 @@
+PyQt5>=5.15
+# headless: the app never calls cv2.imshow/highgui (all display goes through
+# PyQt5 widgets), and the full opencv-python build's bundled Qt/native
+# binaries were crashing (access violation in PyQt5's MSVCP140.dll) when
+# loaded in the same process as PyQt5.
+opencv-python-headless>=4.8
+numpy>=1.24
+ultralytics>=8.3
+# Optional - only needed for the Keras-based auto-label feature in the
+# classification labeling tab, and for the Keras training tab. Skip these
+# if you don't use those features.
+tensorflow>=2.15
+matplotlib>=3.7

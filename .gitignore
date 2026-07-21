@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Stock pretrained weights (publicly downloadable from ultralytics, not project data)
+/yolo11n.pt
+/yolo11s.pt
+/yolo11m.pt
+
+run_stdout.log
+run_stderr.log

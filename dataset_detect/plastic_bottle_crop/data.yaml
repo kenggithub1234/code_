@@ -1,0 +1,6 @@
+path: C:/ProjectsCode/yolo_dataset_tool/dataset_detect/plastic_bottle_crop
+train: images
+val: images
+
+nc: 1
+names: ['plastic_bottle']
