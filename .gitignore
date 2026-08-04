@@ -9,3 +9,7 @@ __pycache__/
 
 run_stdout.log
 run_stderr.log
+
+# Training run outputs / model weights (large binaries, not source)
+/runs/
+/runs_keras/
