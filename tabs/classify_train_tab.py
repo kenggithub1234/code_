@@ -10,7 +10,11 @@ from widgets.augment_group import AugmentGroupBox
 from utils.yolo_train_worker import YoloTrainWorker
 
 
-class TrainTab(QWidget):
+class ClassifyTrainTab(QWidget):
+    """Trains a YOLO11 classification model straight from the folder-per-class
+    dataset produced by the 'Label สำหรับ Classification' tab (after running
+    its Train/Val split), e.g. dataset_classify/train/<class>, .../val/<class>."""
+
     def __init__(self):
         super().__init__()
         self.worker = None
@@ -20,18 +24,18 @@ class TrainTab(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        cfg_group = QGroupBox("ตั้งค่าการเทรน YOLO11")
+        cfg_group = QGroupBox("ตั้งค่าการเทรน YOLO11 Classification")
         cfg_layout = QVBoxLayout()
 
         data_bar = QHBoxLayout()
-        data_bar.addWidget(QLabel("ไฟล์ data.yaml:"))
-        self.data_yaml_edit = QLineEdit()
-        self.data_yaml_edit.setPlaceholderText(
-            "เลือกไฟล์ data.yaml ที่ได้จากแท็บ 'Label สำหรับ Object Detection'"
+        data_bar.addWidget(QLabel("โฟลเดอร์ dataset (มี train/ และ val/):"))
+        self.dataset_edit = QLineEdit(os.path.join(os.getcwd(), "dataset_classify"))
+        self.dataset_edit.setPlaceholderText(
+            "เลือกโฟลเดอร์ dataset จากแท็บ 'Label สำหรับ Classification' หลังกด 'แบ่ง Train/Val อัตโนมัติ'"
         )
-        data_bar.addWidget(self.data_yaml_edit)
-        browse_data_btn = QPushButton("เลือกไฟล์")
-        browse_data_btn.clicked.connect(self.browse_data_yaml)
+        data_bar.addWidget(self.dataset_edit)
+        browse_data_btn = QPushButton("เลือกโฟลเดอร์")
+        browse_data_btn.clicked.connect(self.browse_dataset_dir)
         data_bar.addWidget(browse_data_btn)
         cfg_layout.addLayout(data_bar)
 
@@ -39,7 +43,7 @@ class TrainTab(QWidget):
         model_bar.addWidget(QLabel("โมเดลฐาน:"))
         self.model_combo = QComboBox()
         self.model_combo.addItems(
-            ["yolo11n.pt", "yolo11s.pt", "yolo11m.pt", "yolo11l.pt", "yolo11x.pt"]
+            ["yolo11n-cls.pt", "yolo11s-cls.pt", "yolo11m-cls.pt", "yolo11l-cls.pt", "yolo11x-cls.pt"]
         )
         model_bar.addWidget(self.model_combo)
         model_bar.addWidget(QLabel("(ดาวน์โหลดอัตโนมัติจาก Ultralytics ครั้งแรกที่ใช้)"))
@@ -57,7 +61,7 @@ class TrainTab(QWidget):
         self.imgsz_spin = QSpinBox()
         self.imgsz_spin.setRange(32, 4096)
         self.imgsz_spin.setSingleStep(32)
-        self.imgsz_spin.setValue(640)
+        self.imgsz_spin.setValue(224)
         params_bar.addWidget(self.imgsz_spin)
 
         params_bar.addWidget(QLabel("Batch:"))
@@ -120,17 +124,17 @@ class TrainTab(QWidget):
         layout.addLayout(result_bar)
 
         hint = QLabel(
-            "หลังเทรนเสร็จ นำพาธ best.pt ไปใช้ในช่อง 'โมเดลสำหรับ Auto-label' ที่แท็บ 2 ได้เลย "
-            "เพื่อช่วย pre-label เฟรมถัดไปโดยอัตโนมัติ"
+            "ใช้ dataset เดียวกับแท็บ 'Label สำหรับ Classification' ได้เลย เพียงกด 'แบ่ง Train/Val อัตโนมัติ' "
+            "ในแท็บนั้นก่อน เพื่อให้ได้โครงสร้างโฟลเดอร์ train/<class> และ val/<class> ตามที่ YOLO11 classify ต้องการ"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#9ecbff;")
         layout.addWidget(hint)
 
-    def browse_data_yaml(self):
-        path, _ = QFileDialog.getOpenFileName(self, "เลือก data.yaml", "", "YAML Files (*.yaml *.yml)")
-        if path:
-            self.data_yaml_edit.setText(path)
+    def browse_dataset_dir(self):
+        folder = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์ dataset", self.dataset_edit.text())
+        if folder:
+            self.dataset_edit.setText(folder)
 
     def browse_project_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์ผลลัพธ์", self.project_edit.text())
@@ -143,12 +147,14 @@ class TrainTab(QWidget):
         sb.setValue(sb.maximum())
 
     def start_training(self):
-        data_yaml = self.data_yaml_edit.text().strip()
-        if not data_yaml or not os.path.isfile(data_yaml):
+        dataset_dir = self.dataset_edit.text().strip()
+        train_dir = os.path.join(dataset_dir, "train")
+        val_dir = os.path.join(dataset_dir, "val")
+        if not dataset_dir or not os.path.isdir(train_dir) or not os.path.isdir(val_dir):
             QMessageBox.warning(
                 self, "แจ้งเตือน",
-                "กรุณาเลือกไฟล์ data.yaml ที่ถูกต้อง (สร้างอัตโนมัติจากแท็บ 'Label สำหรับ Object Detection' "
-                "ทุกครั้งที่กดบันทึกภาพ+label)"
+                "กรุณาเลือกโฟลเดอร์ dataset ที่มี train/ และ val/ อยู่ข้างใน "
+                "(กด 'แบ่ง Train/Val อัตโนมัติ' ในแท็บ 'Label สำหรับ Classification' ก่อน)"
             )
             return
         if self.worker and self.worker.isRunning():
@@ -167,7 +173,7 @@ class TrainTab(QWidget):
 
         self.worker = YoloTrainWorker(
             model_name=self.model_combo.currentText(),
-            data=data_yaml,
+            data=dataset_dir,
             epochs=self.epochs_spin.value(),
             imgsz=self.imgsz_spin.value(),
             batch=self.batch_spin.value(),

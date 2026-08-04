@@ -108,7 +108,7 @@ class ClassifyLabelTab(QWidget):
         hint.setStyleSheet("color:#9ecbff;")
         left.addWidget(hint)
 
-        main_layout.addLayout(left, stretch=3)
+        main_layout.addLayout(left, stretch=2)
 
         # ---------------- right panel ----------------
         right = QVBoxLayout()
@@ -170,41 +170,47 @@ class ClassifyLabelTab(QWidget):
         labels_bar.addWidget(browse_labels_btn)
         auto_layout.addLayout(labels_bar)
 
-        opts_bar = QHBoxLayout()
-        opts_bar.addWidget(QLabel("Preprocessing:"))
+        preprocess_bar = QHBoxLayout()
+        preprocess_bar.addWidget(QLabel("Preprocessing:"))
         self.preprocess_combo = QComboBox()
+        self.preprocess_combo.setMinimumWidth(180)
         self.preprocess_combo.addItems([
             "หาร 255 (0-1)",
             "หาร 127.5 ลบ 1 (-1 ถึง 1, แบบ MobileNet)",
             "ไม่ทำ (โมเดลมี Rescaling อยู่แล้ว)",
         ])
-        opts_bar.addWidget(self.preprocess_combo)
-        opts_bar.addWidget(QLabel("Confidence ขั้นต่ำ:"))
+        preprocess_bar.addWidget(self.preprocess_combo, stretch=1)
+        auto_layout.addLayout(preprocess_bar)
+
+        conf_bar = QHBoxLayout()
+        conf_bar.addWidget(QLabel("Confidence ขั้นต่ำ:"))
         self.keras_conf_spin = QDoubleSpinBox()
+        self.keras_conf_spin.setMinimumWidth(90)
         self.keras_conf_spin.setRange(0.0, 1.0)
         self.keras_conf_spin.setSingleStep(0.05)
         self.keras_conf_spin.setValue(0.5)
-        opts_bar.addWidget(self.keras_conf_spin)
-        auto_layout.addLayout(opts_bar)
+        conf_bar.addWidget(self.keras_conf_spin)
+        conf_bar.addStretch()
+        auto_layout.addLayout(conf_bar)
 
         self.use_crops_check = QCheckBox("ใช้ crop ที่วาดไว้แทนการจำแนกทั้งเฟรม (ถ้าเฟรมนั้นมี crop)")
         self.use_crops_check.setChecked(True)
         auto_layout.addWidget(self.use_crops_check)
 
-        auto_btn_bar = QHBoxLayout()
         auto_current_btn = QPushButton("Auto-label เฟรมนี้")
         auto_current_btn.clicked.connect(self.auto_label_current_frame_keras)
-        auto_btn_bar.addWidget(auto_current_btn)
+        auto_layout.addWidget(auto_current_btn)
 
+        remaining_bar = QHBoxLayout()
         self.auto_remaining_btn = QPushButton("Auto-label เฟรมที่เหลือทั้งหมด")
         self.auto_remaining_btn.clicked.connect(self.start_auto_label_remaining_keras)
-        auto_btn_bar.addWidget(self.auto_remaining_btn)
+        remaining_bar.addWidget(self.auto_remaining_btn, stretch=1)
 
         self.auto_stop_btn = QPushButton("หยุด")
         self.auto_stop_btn.setEnabled(False)
         self.auto_stop_btn.clicked.connect(self.stop_auto_label_keras)
-        auto_btn_bar.addWidget(self.auto_stop_btn)
-        auto_layout.addLayout(auto_btn_bar)
+        remaining_bar.addWidget(self.auto_stop_btn)
+        auto_layout.addLayout(remaining_bar)
 
         self.auto_progress = QProgressBar()
         auto_layout.addWidget(self.auto_progress)

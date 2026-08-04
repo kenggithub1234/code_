@@ -17,6 +17,22 @@ def save_yolo_label(label_path, boxes, img_w, img_h):
         f.write("\n".join(lines))
 
 
+def save_yolo_seg_label(label_path, polygons, img_w, img_h):
+    """polygons: list of (class_id, [(x, y), ...]) in pixel coordinates.
+    Writes a YOLO-seg format .txt label file:
+        class_id x1 y1 x2 y2 ... xn yn   (all normalized 0-1)
+    """
+    lines = []
+    for class_id, points in polygons:
+        coords = []
+        for x, y in points:
+            coords.append(f"{x / img_w:.6f}")
+            coords.append(f"{y / img_h:.6f}")
+        lines.append(f"{class_id} " + " ".join(coords))
+    with open(label_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
 def save_classes_file(classes_path, class_names):
     with open(classes_path, "w", encoding="utf-8") as f:
         f.write("\n".join(class_names))

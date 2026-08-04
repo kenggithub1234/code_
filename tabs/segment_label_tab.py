@@ -9,19 +9,12 @@ from PyQt5.QtGui import QKeySequence
 from PyQt5.QtCore import Qt
 
 from widgets.canvas import ImageCanvas
-from widgets.resize_dialog import BatchResizeDialog
-from utils.yolo_format import save_yolo_label, save_classes_file, save_data_yaml
-from utils.coco_format import yolo_dataset_to_coco
-from utils.auto_label import AutoLabelWorker
-
-COLORS = [
-    (231, 76, 60), (46, 204, 113), (52, 152, 219), (241, 196, 15),
-    (155, 89, 182), (26, 188, 156), (230, 126, 34), (149, 165, 166),
-    (192, 57, 43), (39, 174, 96),
-]
+from utils.yolo_format import save_yolo_seg_label, save_classes_file, save_data_yaml
+from utils.auto_label_seg import AutoLabelSegWorker
+from tabs.detect_label_tab import COLORS  # shared color palette for overlays
 
 
-class DetectLabelTab(QWidget):
+class SegmentLabelTab(QWidget):
     def __init__(self):
         super().__init__()
         self.cap = None
@@ -31,11 +24,12 @@ class DetectLabelTab(QWidget):
         self.total_frames = 0
         self.current_idx = 0
         self.current_frame = None
-        self.frame_boxes = {}   # idx -> list of (class_id, x1, y1, x2, y2)
+        # idx -> list of {"points": [(x,y), ...], "class_id": int}
+        self.frame_polygons = {}
         self.classes = []
-        self.output_dir = os.path.join(os.getcwd(), "dataset_detect")
+        self.output_dir = os.path.join(os.getcwd(), "dataset_segment")
 
-        self.action_stack = []  # undo history: (action, frame_idx, box, extra_index)
+        self.action_stack = []  # undo history: (action, frame_idx, polygon, extra_index)
 
         self.auto_model_path = ""
         self._cached_model = None
@@ -67,9 +61,17 @@ class DetectLabelTab(QWidget):
         top_bar.addStretch()
         left.addLayout(top_bar)
 
-        self.canvas = ImageCanvas(draw_enabled=True)
-        self.canvas.box_drawn.connect(self.on_box_drawn)
+        self.canvas = ImageCanvas(draw_enabled=True, draw_mode="polygon")
+        self.canvas.polygon_drawn.connect(self.on_polygon_drawn)
         left.addWidget(self.canvas, stretch=1)
+
+        hint = QLabel(
+            "วาด polygon: คลิกซ้ายทีละจุดรอบวัตถุ (อย่างน้อย 3 จุด) แล้วดับเบิลคลิก หรือคลิกขวา "
+            "เพื่อปิดรูป กด Esc เพื่อยกเลิก polygon ที่วาดค้างอยู่"
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#9ecbff;")
+        left.addWidget(hint)
 
         nav_bar = QHBoxLayout()
         self.prev_btn = QPushButton("◀ ก่อนหน้า")
@@ -98,7 +100,7 @@ class DetectLabelTab(QWidget):
 
         main_layout.addLayout(left, stretch=2)
 
-        # ---------------- right: classes / boxes / save / auto-label ----------------
+        # ---------------- right: classes / polygons / save / auto-label ----------------
         right = QVBoxLayout()
 
         class_group = QGroupBox("คลาส (Classes)")
@@ -116,28 +118,28 @@ class DetectLabelTab(QWidget):
         class_group.setLayout(class_layout)
         right.addWidget(class_group)
 
-        box_group = QGroupBox("กรอบในเฟรมนี้ (Boxes) - เลือกคลาสก่อนลากวาดบนภาพ")
-        box_layout = QVBoxLayout()
-        self.box_list = QListWidget()
-        box_layout.addWidget(self.box_list)
-        box_btns = QHBoxLayout()
-        del_box_btn = QPushButton("ลบกรอบที่เลือก")
-        del_box_btn.clicked.connect(self.delete_selected_box)
-        box_btns.addWidget(del_box_btn)
+        poly_group = QGroupBox("Polygon ในเฟรมนี้ - เลือกคลาสก่อนวาดบนภาพ")
+        poly_layout = QVBoxLayout()
+        self.poly_list = QListWidget()
+        poly_layout.addWidget(self.poly_list)
+        poly_btns = QHBoxLayout()
+        del_poly_btn = QPushButton("ลบ polygon ที่เลือก")
+        del_poly_btn.clicked.connect(self.delete_selected_polygon)
+        poly_btns.addWidget(del_poly_btn)
         undo_btn = QPushButton("↩ Undo (Ctrl+Z)")
         undo_btn.clicked.connect(self.undo)
-        box_btns.addWidget(undo_btn)
-        box_layout.addLayout(box_btns)
-        box_group.setLayout(box_layout)
-        right.addWidget(box_group)
+        poly_btns.addWidget(undo_btn)
+        poly_layout.addLayout(poly_btns)
+        poly_group.setLayout(poly_layout)
+        right.addWidget(poly_group)
 
         # ---- auto-label group ----
-        auto_group = QGroupBox("Auto-label ด้วยโมเดลที่เทรนแล้ว")
+        auto_group = QGroupBox("Auto-label ด้วยโมเดล YOLO11-seg ที่เทรนแล้ว")
         auto_layout = QVBoxLayout()
 
         model_bar = QHBoxLayout()
         self.auto_model_edit = QLineEdit()
-        self.auto_model_edit.setPlaceholderText("เลือกไฟล์ .pt เช่น best.pt จากแท็บเทรน")
+        self.auto_model_edit.setPlaceholderText("เลือกไฟล์ .pt เช่น best.pt จากแท็บเทรน Segmentation")
         model_bar.addWidget(self.auto_model_edit)
         browse_model_btn = QPushButton("เลือกโมเดล")
         browse_model_btn.clicked.connect(self.browse_auto_model)
@@ -155,7 +157,7 @@ class DetectLabelTab(QWidget):
         conf_bar.addStretch()
         auto_layout.addLayout(conf_bar)
 
-        self.only_empty_check = QCheckBox("เฉพาะเฟรมที่ยังไม่มีกรอบ")
+        self.only_empty_check = QCheckBox("เฉพาะเฟรมที่ยังไม่มี polygon")
         self.only_empty_check.setChecked(True)
         auto_layout.addWidget(self.only_empty_check)
 
@@ -184,7 +186,7 @@ class DetectLabelTab(QWidget):
         right.addWidget(auto_group)
 
         # ---- save / export group ----
-        out_group = QGroupBox("บันทึกผลลัพธ์ (YOLO format)")
+        out_group = QGroupBox("บันทึกผลลัพธ์ (YOLO-seg format)")
         out_layout = QVBoxLayout()
         out_dir_bar = QHBoxLayout()
         self.out_dir_edit = QLineEdit(self.output_dir)
@@ -201,14 +203,6 @@ class DetectLabelTab(QWidget):
         save_btn = QPushButton("💾 บันทึกภาพ + label (เฟรมนี้)")
         save_btn.clicked.connect(self.save_current_label)
         out_layout.addWidget(save_btn)
-
-        export_coco_btn = QPushButton("📦 Export เป็น COCO format")
-        export_coco_btn.clicked.connect(self.export_coco)
-        out_layout.addWidget(export_coco_btn)
-
-        batch_resize_btn = QPushButton("🔧 Batch Resize รูปทั้ง Dataset")
-        batch_resize_btn.clicked.connect(self.open_batch_resize_dialog)
-        out_layout.addWidget(batch_resize_btn)
 
         out_group.setLayout(out_layout)
         right.addWidget(out_group)
@@ -241,7 +235,7 @@ class DetectLabelTab(QWidget):
         self.video_label.setText(os.path.basename(path))
         self.slider.setRange(0, max(0, self.total_frames - 1))
         self.frame_spin.setRange(0, max(0, self.total_frames - 1))
-        self.frame_boxes = {}
+        self.frame_polygons = {}
         self.action_stack = []
         self.current_idx = 0
         self.slider.setValue(0)
@@ -281,7 +275,7 @@ class DetectLabelTab(QWidget):
         self.video_label.setText(f"โหมดรูปภาพ: {len(paths)} ไฟล์")
         self.slider.setRange(0, max(0, self.total_frames - 1))
         self.frame_spin.setRange(0, max(0, self.total_frames - 1))
-        self.frame_boxes = {}
+        self.frame_polygons = {}
         self.action_stack = []
         self.current_idx = 0
         self.slider.setValue(0)
@@ -309,8 +303,8 @@ class DetectLabelTab(QWidget):
         self.current_idx = idx
         self.current_frame = frame
         self.canvas.set_frame(frame)
-        self._refresh_box_overlay()
-        self._refresh_box_list()
+        self._refresh_polygon_overlay()
+        self._refresh_polygon_list()
 
         self.slider.blockSignals(True)
         self.slider.setValue(idx)
@@ -346,19 +340,19 @@ class DetectLabelTab(QWidget):
             return
         confirm = QMessageBox.question(
             self, "ยืนยัน",
-            "ลบคลาสนี้? กรอบเดิมที่อ้างอิง id นี้จะยังคงเก็บ id เดิมไว้"
+            "ลบคลาสนี้? polygon เดิมที่อ้างอิง id นี้จะยังคงเก็บ id เดิมไว้"
         )
         if confirm == QMessageBox.Yes:
             self.classes.pop(row)
             self.class_list.takeItem(row)
-            self._refresh_box_overlay()
-            self._refresh_box_list()
+            self._refresh_polygon_overlay()
+            self._refresh_polygon_list()
 
     def current_class_id(self):
         row = self.class_list.currentRow()
         if row < 0:
             if not self.classes:
-                QMessageBox.warning(self, "แจ้งเตือน", "กรุณาเพิ่มคลาสก่อนวาดกรอบ")
+                QMessageBox.warning(self, "แจ้งเตือน", "กรุณาเพิ่มคลาสก่อนวาด polygon")
                 return None
             row = 0
             self.class_list.setCurrentRow(0)
@@ -374,62 +368,64 @@ class DetectLabelTab(QWidget):
         self.class_list.addItem(name)
         return len(self.classes) - 1
 
-    # ---------------- boxes ----------------
-    def on_box_drawn(self, x1, y1, x2, y2):
+    # ---------------- polygons ----------------
+    def on_polygon_drawn(self, points):
         class_id = self.current_class_id()
         if class_id is None:
             return
-        box = (class_id, x1, y1, x2, y2)
-        boxes = self.frame_boxes.setdefault(self.current_idx, [])
-        boxes.append(box)
-        self.action_stack.append(("add", self.current_idx, box, None))
-        self._refresh_box_overlay()
-        self._refresh_box_list()
+        polygon = {"points": points, "class_id": class_id}
+        polys = self.frame_polygons.setdefault(self.current_idx, [])
+        polys.append(polygon)
+        self.action_stack.append(("add", self.current_idx, polygon, None))
+        self._refresh_polygon_overlay()
+        self._refresh_polygon_list()
 
-    def _refresh_box_overlay(self):
-        boxes = self.frame_boxes.get(self.current_idx, [])
-        display_boxes = []
-        for class_id, x1, y1, x2, y2 in boxes:
+    def _refresh_polygon_overlay(self):
+        polys = self.frame_polygons.get(self.current_idx, [])
+        display_polys = []
+        for i, poly in enumerate(polys):
+            class_id = poly["class_id"]
             name = self.classes[class_id] if class_id < len(self.classes) else str(class_id)
             color = COLORS[class_id % len(COLORS)]
-            display_boxes.append((class_id, x1, y1, x2, y2, name, color))
-        self.canvas.set_boxes(display_boxes)
+            display_polys.append((i, poly["points"], name, color))
+        self.canvas.set_polygons(display_polys)
 
-    def _refresh_box_list(self):
-        self.box_list.clear()
-        boxes = self.frame_boxes.get(self.current_idx, [])
-        for i, (class_id, x1, y1, x2, y2) in enumerate(boxes):
+    def _refresh_polygon_list(self):
+        self.poly_list.clear()
+        polys = self.frame_polygons.get(self.current_idx, [])
+        for i, poly in enumerate(polys):
+            class_id = poly["class_id"]
             name = self.classes[class_id] if class_id < len(self.classes) else str(class_id)
-            self.box_list.addItem(f"{i}: {name}  ({x1},{y1}) - ({x2},{y2})")
+            self.poly_list.addItem(f"{i}: {name}  ({len(poly['points'])} จุด)")
 
-    def delete_selected_box(self):
-        row = self.box_list.currentRow()
+    def delete_selected_polygon(self):
+        row = self.poly_list.currentRow()
         if row < 0:
             return
-        boxes = self.frame_boxes.get(self.current_idx, [])
-        if 0 <= row < len(boxes):
-            box = boxes.pop(row)
-            self.action_stack.append(("delete", self.current_idx, box, row))
-        self._refresh_box_overlay()
-        self._refresh_box_list()
+        polys = self.frame_polygons.get(self.current_idx, [])
+        if 0 <= row < len(polys):
+            polygon = polys.pop(row)
+            self.action_stack.append(("delete", self.current_idx, polygon, row))
+        self._refresh_polygon_overlay()
+        self._refresh_polygon_list()
 
     def undo(self):
         if not self.action_stack:
             return
-        action, frame_idx, box, index = self.action_stack.pop()
-        boxes = self.frame_boxes.setdefault(frame_idx, [])
+        action, frame_idx, polygon, index = self.action_stack.pop()
+        polys = self.frame_polygons.setdefault(frame_idx, [])
         if action == "add":
-            if box in boxes:
-                boxes.remove(box)
+            if polygon in polys:
+                polys.remove(polygon)
         elif action == "delete":
-            insert_at = index if index is not None and index <= len(boxes) else len(boxes)
-            boxes.insert(insert_at, box)
+            insert_at = index if index is not None and index <= len(polys) else len(polys)
+            polys.insert(insert_at, polygon)
 
         if frame_idx != self.current_idx:
             self.show_frame(frame_idx)
         else:
-            self._refresh_box_overlay()
-            self._refresh_box_list()
+            self._refresh_polygon_overlay()
+            self._refresh_polygon_list()
 
     # ---------------- auto-label ----------------
     def browse_auto_model(self):
@@ -483,27 +479,29 @@ class DetectLabelTab(QWidget):
             r = results[0]
             names = r.names
             boxes = r.boxes
-            if boxes is not None:
-                for box in boxes:
-                    cls_id = int(box.cls[0])
-                    x1, y1, x2, y2 = (float(v) for v in box.xyxy[0].tolist())
+            masks = r.masks
+            if boxes is not None and masks is not None:
+                for cls_tensor, poly in zip(boxes.cls, masks.xy):
+                    cls_id = int(cls_tensor)
                     name = names.get(cls_id, str(cls_id)) if isinstance(names, dict) else str(names[cls_id])
-                    detections.append((name, int(x1), int(y1), int(x2), int(y2)))
+                    points = [(int(x), int(y)) for x, y in poly.tolist()]
+                    if len(points) >= 3:
+                        detections.append((name, points))
 
         if not detections:
             self.auto_status_label.setText("ไม่พบวัตถุในเฟรมนี้")
             return
 
-        boxes_list = self.frame_boxes.setdefault(self.current_idx, [])
-        for name, x1, y1, x2, y2 in detections:
+        polys_list = self.frame_polygons.setdefault(self.current_idx, [])
+        for name, points in detections:
             class_id = self.get_or_create_class_id(name)
-            box = (class_id, x1, y1, x2, y2)
-            boxes_list.append(box)
-            self.action_stack.append(("add", self.current_idx, box, None))
+            polygon = {"points": points, "class_id": class_id}
+            polys_list.append(polygon)
+            self.action_stack.append(("add", self.current_idx, polygon, None))
 
-        self._refresh_box_overlay()
-        self._refresh_box_list()
-        self.auto_status_label.setText(f"เพิ่มกรอบอัตโนมัติ {len(detections)} กรอบในเฟรมนี้")
+        self._refresh_polygon_overlay()
+        self._refresh_polygon_list()
+        self.auto_status_label.setText(f"เพิ่ม polygon อัตโนมัติ {len(detections)} รายการในเฟรมนี้")
 
     def start_auto_label_remaining(self):
         model_path = self.auto_model_edit.text().strip()
@@ -531,7 +529,7 @@ class DetectLabelTab(QWidget):
         self.auto_remaining_btn.setEnabled(False)
         self.auto_stop_btn.setEnabled(True)
 
-        self.auto_worker = AutoLabelWorker(
+        self.auto_worker = AutoLabelSegWorker(
             source_type=self.source_mode,
             video_path=self.video_path,
             image_paths=self.image_paths,
@@ -554,20 +552,20 @@ class DetectLabelTab(QWidget):
         self.auto_progress.setValue(done)
 
     def on_auto_frame_result(self, frame_idx, detections):
-        # detections: list of (name, x1, y1, x2, y2) - runs in GUI thread
-        existing = self.frame_boxes.get(frame_idx, [])
+        # detections: list of (name, [(x,y), ...]) - runs in GUI thread
+        existing = self.frame_polygons.get(frame_idx, [])
         if self.only_empty_check.isChecked() and existing:
             return  # don't overwrite frames the user already labeled
 
-        new_boxes = []
-        for name, x1, y1, x2, y2 in detections:
+        new_polys = []
+        for name, points in detections:
             class_id = self.get_or_create_class_id(name)
-            new_boxes.append((class_id, x1, y1, x2, y2))
-        self.frame_boxes[frame_idx] = new_boxes
+            new_polys.append({"points": points, "class_id": class_id})
+        self.frame_polygons[frame_idx] = new_polys
 
         if frame_idx == self.current_idx:
-            self._refresh_box_overlay()
-            self._refresh_box_list()
+            self._refresh_polygon_overlay()
+            self._refresh_polygon_list()
 
     def on_auto_finished(self, success, message):
         self.auto_remaining_btn.setEnabled(True)
@@ -608,32 +606,11 @@ class DetectLabelTab(QWidget):
         label_path = os.path.join(labels_dir, base + ".txt")
         cv2.imwrite(img_path, self.current_frame)
 
-        boxes = self.frame_boxes.get(self.current_idx, [])
-        save_yolo_label(label_path, boxes, w, h)
+        polys = self.frame_polygons.get(self.current_idx, [])
+        polygons_for_save = [(p["class_id"], p["points"]) for p in polys]
+        save_yolo_seg_label(label_path, polygons_for_save, w, h)
         save_classes_file(os.path.join(output_dir, "classes.txt"), self.classes)
         save_data_yaml(os.path.join(output_dir, "data.yaml"), output_dir, self.classes)
 
         if self.auto_next_check.isChecked():
             self.next_frame()
-
-    def export_coco(self):
-        output_dir = self.out_dir_edit.text()
-        if not os.path.isdir(os.path.join(output_dir, "images")):
-            QMessageBox.warning(
-                self, "แจ้งเตือน",
-                "ยังไม่พบข้อมูลใน dataset นี้ กรุณาบันทึกภาพ + label อย่างน้อย 1 เฟรมก่อน"
-            )
-            return
-        try:
-            json_path, n_images, n_anns = yolo_dataset_to_coco(output_dir)
-        except Exception as e:
-            QMessageBox.warning(self, "ผิดพลาด", f"ไม่สามารถแปลงเป็น COCO ได้: {e}")
-            return
-        QMessageBox.information(
-            self, "สำเร็จ",
-            f"แปลงเป็น COCO format แล้ว\nไฟล์: {json_path}\nจำนวนภาพ: {n_images}\nจำนวนกรอบ: {n_anns}"
-        )
-
-    def open_batch_resize_dialog(self):
-        dialog = BatchResizeDialog(self, "detection", self.out_dir_edit.text())
-        dialog.exec_()

@@ -10,7 +10,7 @@ from widgets.augment_group import AugmentGroupBox
 from utils.yolo_train_worker import YoloTrainWorker
 
 
-class TrainTab(QWidget):
+class SegmentTrainTab(QWidget):
     def __init__(self):
         super().__init__()
         self.worker = None
@@ -20,14 +20,14 @@ class TrainTab(QWidget):
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        cfg_group = QGroupBox("ตั้งค่าการเทรน YOLO11")
+        cfg_group = QGroupBox("ตั้งค่าการเทรน YOLO11 Segmentation")
         cfg_layout = QVBoxLayout()
 
         data_bar = QHBoxLayout()
         data_bar.addWidget(QLabel("ไฟล์ data.yaml:"))
         self.data_yaml_edit = QLineEdit()
         self.data_yaml_edit.setPlaceholderText(
-            "เลือกไฟล์ data.yaml ที่ได้จากแท็บ 'Label สำหรับ Object Detection'"
+            "เลือกไฟล์ data.yaml ที่ได้จากแท็บ 'Label สำหรับ Segmentation'"
         )
         data_bar.addWidget(self.data_yaml_edit)
         browse_data_btn = QPushButton("เลือกไฟล์")
@@ -39,7 +39,7 @@ class TrainTab(QWidget):
         model_bar.addWidget(QLabel("โมเดลฐาน:"))
         self.model_combo = QComboBox()
         self.model_combo.addItems(
-            ["yolo11n.pt", "yolo11s.pt", "yolo11m.pt", "yolo11l.pt", "yolo11x.pt"]
+            ["yolo11n-seg.pt", "yolo11s-seg.pt", "yolo11m-seg.pt", "yolo11l-seg.pt", "yolo11x-seg.pt"]
         )
         model_bar.addWidget(self.model_combo)
         model_bar.addWidget(QLabel("(ดาวน์โหลดอัตโนมัติจาก Ultralytics ครั้งแรกที่ใช้)"))
@@ -120,7 +120,7 @@ class TrainTab(QWidget):
         layout.addLayout(result_bar)
 
         hint = QLabel(
-            "หลังเทรนเสร็จ นำพาธ best.pt ไปใช้ในช่อง 'โมเดลสำหรับ Auto-label' ที่แท็บ 2 ได้เลย "
+            "หลังเทรนเสร็จ นำพาธ best.pt ไปใช้ในช่อง 'โมเดลสำหรับ Auto-label' ที่แท็บ Segmentation Labeling ได้เลย "
             "เพื่อช่วย pre-label เฟรมถัดไปโดยอัตโนมัติ"
         )
         hint.setWordWrap(True)
@@ -147,7 +147,7 @@ class TrainTab(QWidget):
         if not data_yaml or not os.path.isfile(data_yaml):
             QMessageBox.warning(
                 self, "แจ้งเตือน",
-                "กรุณาเลือกไฟล์ data.yaml ที่ถูกต้อง (สร้างอัตโนมัติจากแท็บ 'Label สำหรับ Object Detection' "
+                "กรุณาเลือกไฟล์ data.yaml ที่ถูกต้อง (สร้างอัตโนมัติจากแท็บ 'Label สำหรับ Segmentation' "
                 "ทุกครั้งที่กดบันทึกภาพ+label)"
             )
             return

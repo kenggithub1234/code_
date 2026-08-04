@@ -21,6 +21,9 @@ from tabs.detect_label_tab import DetectLabelTab
 from tabs.classify_label_tab import ClassifyLabelTab
 from tabs.train_tab import TrainTab
 from tabs.train_keras_tab import TrainKerasTab
+from tabs.segment_label_tab import SegmentLabelTab
+from tabs.segment_train_tab import SegmentTrainTab
+from tabs.classify_train_tab import ClassifyTrainTab
 
 APP_STYLESHEET = """
 QWidget {
@@ -90,8 +93,27 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QListWidget {
     padding: 4px;
     selection-background-color: #3f8efc;
 }
+QComboBox {
+    padding-right: 22px;
+}
 QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
     border: none;
+}
+QSpinBox, QDoubleSpinBox {
+    padding-right: 20px;
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 16px;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 16px;
 }
 QSlider::groove:horizontal {
     height: 6px;
@@ -144,12 +166,19 @@ class MainWindow(QMainWindow):
         self.classify_tab = ClassifyLabelTab()
         self.train_tab = TrainTab()
         self.train_keras_tab = TrainKerasTab()
+        self.segment_label_tab = SegmentLabelTab()
+        self.segment_train_tab = SegmentTrainTab()
+        self.classify_train_tab = ClassifyTrainTab()
 
         tabs.addTab(self.record_tab, "1. บันทึกวิดีโอจากกล้อง USB")
         tabs.addTab(self.detect_tab, "2. Label สำหรับ Object Detection")
-        tabs.addTab(self.classify_tab, "3. Label สำหรับ Classification")
-        tabs.addTab(self.train_tab, "4. เทรนโมเดล YOLO11")
-        tabs.addTab(self.train_keras_tab, "5. เทรนโมเดล Keras Classification")
+        tabs.addTab(self.classify_tab, "3. Label สำหรับ Keras Classification")
+        tabs.addTab(self.segment_label_tab, "4. Label สำหรับ Segmentation")
+        tabs.addTab(self.train_tab, "5. เทรนโมเดล YOLO11 Object Detection")
+        tabs.addTab(self.train_keras_tab, "6. เทรนโมเดล Keras Classification")
+        # tabs.addTab(self.segment_label_tab, "6. Label สำหรับ Segmentation")
+        tabs.addTab(self.segment_train_tab, "7. เทรนโมเดล YOLO11 Segmentation")
+        tabs.addTab(self.classify_train_tab, "8. เทรนโมเดล YOLO11 Classification")
 
         self.setCentralWidget(tabs)
 
