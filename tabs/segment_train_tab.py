@@ -131,6 +131,8 @@ class SegmentTrainTab(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "เลือก data.yaml", "", "YAML Files (*.yaml *.yml)")
         if path:
             self.data_yaml_edit.setText(path)
+            # ใช้ภาพจริงจาก dataset นี้เป็นตัวอย่างใน tooltip ของ Augmentation
+            self.aug_group.set_sample_image_from_yaml(path)
 
     def browse_project_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์ผลลัพธ์", self.project_edit.text())

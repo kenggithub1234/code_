@@ -135,6 +135,8 @@ class ClassifyTrainTab(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์ dataset", self.dataset_edit.text())
         if folder:
             self.dataset_edit.setText(folder)
+            # ใช้ภาพจริงจาก dataset นี้เป็นตัวอย่างใน tooltip ของ Augmentation
+            self.aug_group.set_sample_image_from_folder(folder)
 
     def browse_project_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์ผลลัพธ์", self.project_edit.text())

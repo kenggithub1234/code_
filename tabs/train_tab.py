@@ -131,6 +131,8 @@ class TrainTab(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "เลือก data.yaml", "", "YAML Files (*.yaml *.yml)")
         if path:
             self.data_yaml_edit.setText(path)
+            # ใช้ภาพจริงจาก dataset นี้เป็นตัวอย่างใน tooltip ของ Augmentation
+            self.aug_group.set_sample_image_from_yaml(path)
 
     def browse_project_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "เลือกโฟลเดอร์ผลลัพธ์", self.project_edit.text())
@@ -164,6 +166,11 @@ class TrainTab(QWidget):
         os.makedirs(project_dir, exist_ok=True)
 
         augment_params = self.aug_group.values()
+        enabled = self.aug_group.enabled_params()
+        self.append_log(
+            "Augmentation ที่เปิดใช้: "
+            + (", ".join(f"{k}={augment_params[k]:g}" for k in enabled) if enabled else "ไม่เปิดใช้เลย")
+        )
 
         self.worker = YoloTrainWorker(
             model_name=self.model_combo.currentText(),
