@@ -11,6 +11,9 @@ from PyQt5.QtCore import Qt
 from widgets.canvas import ImageCanvas
 from widgets.resize_dialog import BatchResizeDialog
 from utils.yolo_format import save_yolo_label, save_classes_file, save_data_yaml
+from utils.train_val_split import (
+    count_detect_dataset, has_detect_data, is_detect_split, split_detect_train_val
+)
 from utils.coco_format import yolo_dataset_to_coco
 from utils.auto_label import AutoLabelWorker
 
@@ -209,6 +212,15 @@ class DetectLabelTab(QWidget):
         batch_resize_btn = QPushButton("🔧 Batch Resize รูปทั้ง Dataset")
         batch_resize_btn.clicked.connect(self.open_batch_resize_dialog)
         out_layout.addWidget(batch_resize_btn)
+
+        split_btn = QPushButton("✂ แยกข้อมูลเป็น train / val")
+        split_btn.clicked.connect(self.split_train_val)
+        out_layout.addWidget(split_btn)
+
+        self.split_status_label = QLabel("")
+        self.split_status_label.setWordWrap(True)
+        self.split_status_label.setStyleSheet("color:#9ecbff;")
+        out_layout.addWidget(self.split_status_label)
 
         out_group.setLayout(out_layout)
         right.addWidget(out_group)
@@ -584,6 +596,7 @@ class DetectLabelTab(QWidget):
         if folder:
             self.output_dir = folder
             self.out_dir_edit.setText(folder)
+            self.refresh_split_status()
 
     def save_current_label(self):
         if self.current_frame is None:
@@ -611,14 +624,90 @@ class DetectLabelTab(QWidget):
         boxes = self.frame_boxes.get(self.current_idx, [])
         save_yolo_label(label_path, boxes, w, h)
         save_classes_file(os.path.join(output_dir, "classes.txt"), self.classes)
-        save_data_yaml(os.path.join(output_dir, "data.yaml"), output_dir, self.classes)
+        # ถ้าเคยแยก train/val ไว้แล้ว ต้องคง path ใน data.yaml ไว้แบบเดิม
+        # ไม่อย่างนั้นการบันทึกเฟรมใหม่จะเขียนทับกลับไปเป็นแบบ flat
+        save_data_yaml(
+            os.path.join(output_dir, "data.yaml"), output_dir, self.classes,
+            split=is_detect_split(output_dir),
+        )
+        self.refresh_split_status()
 
         if self.auto_next_check.isChecked():
             self.next_frame()
 
+    def refresh_split_status(self):
+        """อัปเดตข้อความสรุปสถานะการแยก train/val ของ dataset ปัจจุบัน"""
+        output_dir = self.out_dir_edit.text()
+        if not has_detect_data(output_dir):
+            self.split_status_label.setText("")
+            return
+
+        n_train, n_val, n_unsplit = count_detect_dataset(output_dir)
+        if not is_detect_split(output_dir):
+            self.split_status_label.setText(
+                f"ยังไม่ได้แยก train/val ({n_unsplit} ภาพอยู่ใน images/) "
+                f"— กดปุ่มด้านบนเพื่อแยก"
+            )
+            return
+
+        text = f"แยกแล้ว: train {n_train} ภาพ / val {n_val} ภาพ"
+        if n_unsplit:
+            text += (
+                f"\n⚠ มีอีก {n_unsplit} ภาพที่บันทึกเพิ่มภายหลังและยังไม่ถูกแยก "
+                f"(ยังไม่ถูกใช้เทรน) กดปุ่มแยกอีกครั้งเพื่อรวมเข้าไป"
+            )
+            self.split_status_label.setStyleSheet("color:#ffcc66;")
+        else:
+            self.split_status_label.setStyleSheet("color:#9ecbff;")
+        self.split_status_label.setText(text)
+
+    def split_train_val(self):
+        output_dir = self.out_dir_edit.text()
+        if not has_detect_data(output_dir):
+            QMessageBox.warning(
+                self, "แจ้งเตือน",
+                "ยังไม่พบข้อมูลใน dataset นี้ กรุณาบันทึกภาพ + label อย่างน้อย 1 ภาพก่อน"
+            )
+            return
+
+        percent, ok = QInputDialog.getInt(
+            self, "แยก train / val",
+            "สัดส่วนข้อมูลสำหรับ train (%)\n(ที่เหลือจะเป็น val)",
+            80, 5, 95, 5
+        )
+        if not ok:
+            return
+
+        try:
+            n_train, n_val, n_missing = split_detect_train_val(
+                output_dir, train_ratio=percent / 100.0
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "ผิดพลาด", f"ไม่สามารถแยก train/val ได้: {e}")
+            return
+
+        # data.yaml ต้องชี้ไปที่ images/train และ images/val แทน
+        save_data_yaml(
+            os.path.join(output_dir, "data.yaml"), output_dir, self.classes, split=True
+        )
+        self.refresh_split_status()
+
+        msg = (
+            f"แยกข้อมูลเรียบร้อย\n\n"
+            f"train: {n_train} ภาพ\n"
+            f"val:   {n_val} ภาพ\n\n"
+            f"โครงสร้างใหม่:\n"
+            f"  train/images, train/labels\n"
+            f"  val/images,   val/labels\n\n"
+            f"data.yaml ถูกอัปเดตให้ชี้ไปที่โฟลเดอร์ใหม่แล้ว"
+        )
+        if n_missing:
+            msg += f"\n\nหมายเหตุ: มี {n_missing} ภาพที่ไม่มีไฟล์ label จึงสร้างไฟล์เปล่าให้ (นับเป็นภาพพื้นหลัง)"
+        QMessageBox.information(self, "สำเร็จ", msg)
+
     def export_coco(self):
         output_dir = self.out_dir_edit.text()
-        if not os.path.isdir(os.path.join(output_dir, "images")):
+        if not has_detect_data(output_dir):
             QMessageBox.warning(
                 self, "แจ้งเตือน",
                 "ยังไม่พบข้อมูลใน dataset นี้ กรุณาบันทึกภาพ + label อย่างน้อย 1 เฟรมก่อน"

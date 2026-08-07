@@ -38,12 +38,17 @@ def save_classes_file(classes_path, class_names):
         f.write("\n".join(class_names))
 
 
-def save_data_yaml(yaml_path, dataset_root, class_names):
+def save_data_yaml(yaml_path, dataset_root, class_names, split=False):
+    """split=False: train/val ชี้ที่ images/ เดียวกัน (ยังไม่ได้แยกข้อมูล)
+    split=True:  ชี้ที่ train/images และ val/images ที่แยกไว้แล้ว
+    """
     names_list = "[" + ", ".join(f"'{c}'" for c in class_names) + "]"
+    train_dir = "train/images" if split else "images"
+    val_dir = "val/images" if split else "images"
     content = (
         f"path: {dataset_root}\n"
-        f"train: images\n"
-        f"val: images\n\n"
+        f"train: {train_dir}\n"
+        f"val: {val_dir}\n\n"
         f"nc: {len(class_names)}\n"
         f"names: {names_list}\n"
     )

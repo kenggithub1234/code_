@@ -1,5 +1,7 @@
 import os
 import shutil
+
+from utils.train_val_split import collect_detect_pairs
 import cv2
 import numpy as np
 
@@ -42,10 +44,12 @@ def resize_detection_dataset(dataset_dir, target_w, target_h, mode="letterbox",
 
     Returns: (num_images_processed, out_images_dir, out_labels_dir)
     """
-    images_dir = os.path.join(dataset_dir, "images")
-    labels_dir = os.path.join(dataset_dir, "labels")
-    if not os.path.isdir(images_dir):
-        raise FileNotFoundError("ไม่พบโฟลเดอร์ images/ ใน dataset ที่เลือก")
+    # ใช้ตัวรวบรวมเดียวกับตอนแยก train/val จึงเห็นภาพครบทั้งแบบ flat และแบบแยกแล้ว
+    pairs = collect_detect_pairs(dataset_dir)
+    if not pairs:
+        raise FileNotFoundError(
+            "ไม่พบภาพใน dataset ที่เลือก (ควรมี images/ หรือ train/images + val/images)"
+        )
 
     if output_dir is None:
         output_dir = dataset_dir if overwrite else os.path.join(
@@ -53,42 +57,47 @@ def resize_detection_dataset(dataset_dir, target_w, target_h, mode="letterbox",
         )
     out_images_dir = os.path.join(output_dir, "images")
     out_labels_dir = os.path.join(output_dir, "labels")
-    os.makedirs(out_images_dir, exist_ok=True)
-    os.makedirs(out_labels_dir, exist_ok=True)
+    # โฟลเดอร์ปลายทางจริงถูกสร้างตอนวนแต่ละภาพ (ขึ้นกับว่าต้นทาง flat หรือแยก train/val แล้ว)
+    os.makedirs(output_dir, exist_ok=True)
 
     for fname in ("classes.txt", "data.yaml"):
         src = os.path.join(dataset_dir, fname)
         if os.path.isfile(src) and os.path.abspath(output_dir) != os.path.abspath(dataset_dir):
             shutil.copy2(src, os.path.join(output_dir, fname))
 
-    img_files = sorted(
-        f for f in os.listdir(images_dir)
-        if f.lower().endswith((".jpg", ".jpeg", ".png"))
-    )
-    total = len(img_files)
+    stems = sorted(pairs)
+    total = len(stems)
     count = 0
 
-    for i, fname in enumerate(img_files):
-        img_path = os.path.join(images_dir, fname)
+    for i, stem in enumerate(stems):
+        img_path, label_path = pairs[stem]
         img = cv2.imread(img_path)
         if img is None:
             if progress_callback:
                 progress_callback(i + 1, total)
             continue
         h, w = img.shape[:2]
+        fname = os.path.basename(img_path)
         base = os.path.splitext(fname)[0]
-        label_path = os.path.join(labels_dir, base + ".txt")
+        # คงโครงสร้างของต้นทางไว้ในผลลัพธ์: images/ -> images/ และ
+        # train/images -> train/images (พร้อม labels ของฝั่งนั้น)
+        rel_img_dir = os.path.relpath(os.path.dirname(img_path), dataset_dir)
+        sub = os.path.dirname(rel_img_dir)  # "" สำหรับ flat, "train"/"val" สำหรับที่แยกแล้ว
+        dst_images_dir = os.path.join(output_dir, sub, "images")
+        dst_labels_dir = os.path.join(output_dir, sub, "labels")
+        os.makedirs(dst_images_dir, exist_ok=True)
+        os.makedirs(dst_labels_dir, exist_ok=True)
 
         if mode == "stretch":
             new_img = _resize_stretch(img, target_w, target_h)
             new_lines = None
-            if os.path.isfile(label_path):
+            if label_path and os.path.isfile(label_path):
                 with open(label_path, "r", encoding="utf-8") as f:
                     new_lines = f.read()
         else:  # letterbox
             new_img, scale, pad_x, pad_y = _resize_letterbox(img, target_w, target_h)
             new_lines_list = []
-            if os.path.isfile(label_path):
+            if label_path and os.path.isfile(label_path):
                 with open(label_path, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
@@ -112,9 +121,9 @@ def resize_detection_dataset(dataset_dir, target_w, target_h, mode="letterbox",
                         )
             new_lines = "\n".join(new_lines_list)
 
-        cv2.imwrite(os.path.join(out_images_dir, fname), new_img)
+        cv2.imwrite(os.path.join(dst_images_dir, fname), new_img)
         if new_lines is not None:
-            with open(os.path.join(out_labels_dir, base + ".txt"), "w", encoding="utf-8") as f:
+            with open(os.path.join(dst_labels_dir, base + ".txt"), "w", encoding="utf-8") as f:
                 f.write(new_lines)
 
         count += 1

@@ -2,20 +2,28 @@ import os
 import json
 import cv2
 
+from utils.train_val_split import collect_detect_pairs
+
 
 def yolo_dataset_to_coco(dataset_dir, output_json_path=None):
     """Reads a YOLO-format dataset (images/, labels/, classes.txt) produced
     by the detection labeling tab and converts it into a single COCO-style
     JSON annotation file. Category ids match the YOLO class ids (0-indexed).
 
+    รองรับทั้ง dataset แบบ flat (images/) และแบบที่แยก train/val แล้ว
+    (train/images, val/images) - กรณีหลัง file_name จะเก็บเป็น
+    train/images/xxx.jpg เพื่อไม่ให้ชื่อไฟล์ซ้ำกันข้ามฝั่ง
+
     Returns: (output_json_path, num_images, num_annotations)
     """
-    images_dir = os.path.join(dataset_dir, "images")
-    labels_dir = os.path.join(dataset_dir, "labels")
     classes_path = os.path.join(dataset_dir, "classes.txt")
 
-    if not os.path.isdir(images_dir) or not os.path.isdir(labels_dir):
-        raise FileNotFoundError("ไม่พบโฟลเดอร์ images/ หรือ labels/ ใน dataset ที่เลือก")
+    # ใช้ตัวรวบรวมเดียวกับตอนแยก train/val จึงเห็นภาพครบทั้งแบบ flat และแบบแยกแล้ว
+    pairs = collect_detect_pairs(dataset_dir)
+    if not pairs:
+        raise FileNotFoundError(
+            "ไม่พบภาพใน dataset ที่เลือก (ควรมี images/ หรือ train/images + val/images)"
+        )
 
     class_names = []
     if os.path.isfile(classes_path):
@@ -31,21 +39,17 @@ def yolo_dataset_to_coco(dataset_dir, output_json_path=None):
     annotations = []
     ann_id = 1
 
-    img_files = sorted(
-        f for f in os.listdir(images_dir)
-        if f.lower().endswith((".jpg", ".jpeg", ".png"))
-    )
-
-    for img_id, fname in enumerate(img_files, start=1):
-        img_path = os.path.join(images_dir, fname)
+    for img_id, stem in enumerate(sorted(pairs), start=1):
+        img_path, label_path = pairs[stem]
         img = cv2.imread(img_path)
         if img is None:
             continue
         h, w = img.shape[:2]
+        # ชื่อไฟล์อ้างอิงจากรากของ dataset เพื่อให้รู้ว่าอยู่ฝั่ง train หรือ val
+        fname = os.path.relpath(img_path, dataset_dir).replace(os.sep, "/")
         images.append({"id": img_id, "file_name": fname, "width": w, "height": h})
 
-        label_path = os.path.join(labels_dir, os.path.splitext(fname)[0] + ".txt")
-        if not os.path.isfile(label_path):
+        if not label_path or not os.path.isfile(label_path):
             continue
 
         with open(label_path, "r", encoding="utf-8") as lf:
