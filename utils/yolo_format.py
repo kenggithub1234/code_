@@ -33,6 +33,36 @@ def save_yolo_seg_label(label_path, polygons, img_w, img_h):
         f.write("\n".join(lines))
 
 
+def read_yolo_seg_label(label_path, img_w, img_h):
+    """อ่านไฟล์ label แบบ YOLO-seg กลับมาเป็นพิกัดพิกเซล
+
+    คืน list ของ (class_id, [(x, y), ...]) โดย x, y เป็นพิกเซลจริงในภาพ
+    บรรทัดที่จำนวนตัวเลขไม่ครบคู่ หรือมีจุดน้อยกว่า 3 จุด จะถูกข้าม
+    """
+    polygons = []
+    if not os.path.isfile(label_path):
+        return polygons
+    with open(label_path, "r", encoding="utf-8") as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) < 7:  # class + อย่างน้อย 3 จุด (6 ตัวเลข)
+                continue
+            try:
+                class_id = int(float(parts[0]))
+                coords = [float(v) for v in parts[1:]]
+            except ValueError:
+                continue
+            if len(coords) % 2:
+                coords = coords[:-1]
+            points = [
+                (coords[i] * img_w, coords[i + 1] * img_h)
+                for i in range(0, len(coords), 2)
+            ]
+            if len(points) >= 3:
+                polygons.append((class_id, points))
+    return polygons
+
+
 def save_classes_file(classes_path, class_names):
     with open(classes_path, "w", encoding="utf-8") as f:
         f.write("\n".join(class_names))

@@ -1,7 +1,9 @@
 import os
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from utils.batch_resize import resize_detection_dataset, resize_classification_dataset
+from utils.batch_resize import (
+    resize_detection_dataset, resize_segmentation_dataset, resize_classification_dataset
+)
 
 
 class BatchResizeWorker(QThread):
@@ -10,7 +12,7 @@ class BatchResizeWorker(QThread):
 
     def __init__(self, kind, dataset_dir, target_w, target_h, mode, output_dir, overwrite):
         super().__init__()
-        self.kind = kind  # "detection" or "classification"
+        self.kind = kind  # "detection", "segmentation" or "classification"
         self.dataset_dir = dataset_dir
         self.target_w = target_w
         self.target_h = target_h
@@ -23,8 +25,12 @@ class BatchResizeWorker(QThread):
 
     def run(self):
         try:
-            if self.kind == "detection":
-                count, out_images_dir, _ = resize_detection_dataset(
+            if self.kind in ("detection", "segmentation"):
+                resize_fn = (
+                    resize_detection_dataset if self.kind == "detection"
+                    else resize_segmentation_dataset
+                )
+                count, out_images_dir, _ = resize_fn(
                     self.dataset_dir, self.target_w, self.target_h,
                     mode=self.mode, output_dir=self.output_dir, overwrite=self.overwrite,
                     progress_callback=self._progress,

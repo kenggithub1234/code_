@@ -26,9 +26,11 @@ class ThumbnailLoader(QThread):
     finished_signal = pyqtSignal()
 
     def __init__(self, indices, frame_boxes, classes, colors,
-                 source_type="video", video_path=None, image_paths=None):
+                 source_type="video", video_path=None, image_paths=None,
+                 shape_type="box"):
         super().__init__()
         self.indices = list(indices)
+        self.shape_type = shape_type  # "box" หรือ "polygon"
         self.frame_boxes = {i: list(frame_boxes.get(i, [])) for i in self.indices}
         self.classes = list(classes)
         self.colors = list(colors)
@@ -49,18 +51,43 @@ class ThumbnailLoader(QThread):
             return None
         return cv2.imread(self.image_paths[idx])
 
+    def _shape_color(self, class_id):
+        color = self.colors[class_id % len(self.colors)]
+        # ค่าสีในโปรเจกต์เก็บเป็น RGB ส่วน cv2 ใช้ BGR จึงต้องสลับ
+        return (color[2], color[1], color[0])
+
+    def _class_name(self, class_id):
+        return self.classes[class_id] if class_id < len(self.classes) else str(class_id)
+
     def _draw_boxes(self, frame, idx):
         out = frame.copy()
         h, w = out.shape[:2]
         thickness = max(1, int(round(min(w, h) / 200)))
-        for class_id, x1, y1, x2, y2 in self.frame_boxes.get(idx, []):
-            color = self.colors[class_id % len(self.colors)]
-            # ค่าสีในโปรเจกต์เก็บเป็น RGB ส่วน cv2 ใช้ BGR จึงต้องสลับ
-            bgr = (color[2], color[1], color[0])
-            cv2.rectangle(out, (int(x1), int(y1)), (int(x2), int(y2)), bgr, thickness)
-            name = self.classes[class_id] if class_id < len(self.classes) else str(class_id)
-            cv2.putText(out, name, (int(x1), max(12, int(y1) - 4)),
-                        cv2.FONT_HERSHEY_SIMPLEX, min(w, h) / 500.0, bgr,
+        font_scale = min(w, h) / 500.0
+
+        for shape in self.frame_boxes.get(idx, []):
+            if self.shape_type == "polygon":
+                class_id = shape["class_id"]
+                points = shape["points"]
+                if len(points) < 3:
+                    continue
+                bgr = self._shape_color(class_id)
+                pts = np.array([[int(x), int(y)] for x, y in points], dtype=np.int32)
+                # ระบายโปร่งแสงทับ เพื่อให้เห็นพื้นที่ที่ polygon ครอบจริงๆ
+                overlay = out.copy()
+                cv2.fillPoly(overlay, [pts], bgr)
+                cv2.addWeighted(overlay, 0.35, out, 0.65, 0, out)
+                cv2.polylines(out, [pts], True, bgr, thickness, cv2.LINE_AA)
+                anchor = (int(min(x for x, _ in points)),
+                          max(12, int(min(y for _, y in points)) - 4))
+            else:
+                class_id, x1, y1, x2, y2 = shape
+                bgr = self._shape_color(class_id)
+                cv2.rectangle(out, (int(x1), int(y1)), (int(x2), int(y2)), bgr, thickness)
+                anchor = (int(x1), max(12, int(y1) - 4))
+
+            cv2.putText(out, self._class_name(class_id), anchor,
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, bgr,
                         thickness, cv2.LINE_AA)
         return out
 
@@ -94,7 +121,7 @@ class ThumbnailLoader(QThread):
 class PreviewItem(QWidget):
     """ภาพย่อ 1 รูป พร้อม checkbox ว่าจะบันทึกหรือไม่"""
 
-    def __init__(self, idx, caption, n_boxes, parent=None):
+    def __init__(self, idx, caption, n_boxes, shape_word="กรอบ", parent=None):
         super().__init__(parent)
         self.idx = idx
 
@@ -113,7 +140,7 @@ class PreviewItem(QWidget):
         self.image_label.setStyleSheet("background-color:#1a1a1a;border:1px solid #444;")
         layout.addWidget(self.image_label)
 
-        info = f"{n_boxes} กรอบ" if n_boxes else "ไม่มีกรอบ"
+        info = f"{n_boxes} {shape_word}" if n_boxes else f"ไม่มี{shape_word}"
         self.info_label = QLabel(info)
         self.info_label.setStyleSheet(
             "color:#9ecbff;" if n_boxes else "color:#e0a83a;"
@@ -139,12 +166,15 @@ class SavePreviewDialog(QDialog):
     """แสดงภาพตัวอย่างทุกเฟรมที่ label ไว้ พร้อม checkbox ให้เลือกว่าจะบันทึกรูปไหน"""
 
     def __init__(self, parent, frame_boxes, classes, colors,
-                 source_type="video", video_path=None, image_paths=None):
+                 source_type="video", video_path=None, image_paths=None,
+                 shape_type="box"):
         super().__init__(parent)
         self.setWindowTitle("เลือกภาพที่ต้องการบันทึก")
         self.resize(950, 700)
 
         self.frame_boxes = frame_boxes
+        self.shape_type = shape_type
+        self.shape_word = "polygon" if shape_type == "polygon" else "กรอบ"
         self.source_type = source_type
         self.image_paths = image_paths or []
         self.items = {}
@@ -153,7 +183,7 @@ class SavePreviewDialog(QDialog):
 
         hint = QLabel(
             "ติ๊กเลือกเฉพาะรูปที่ต้องการบันทึก (คลิกที่รูปก็ติ๊ก/ยกเลิกได้) "
-            "ค่าเริ่มต้นจะติ๊กให้เฉพาะเฟรมที่มีกรอบ"
+            f"ค่าเริ่มต้นจะติ๊กให้เฉพาะเฟรมที่มี{self.shape_word}"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#9ecbff;")
@@ -164,7 +194,7 @@ class SavePreviewDialog(QDialog):
         for text, slot in (
             ("เลือกทั้งหมด", lambda: self._set_all(True)),
             ("ไม่เลือกเลย", lambda: self._set_all(False)),
-            ("เฉพาะที่มีกรอบ", self._select_with_boxes),
+            (f"เฉพาะที่มี{self.shape_word}", self._select_with_boxes),
             ("สลับการเลือก", self._invert),
         ):
             btn = QPushButton(text)
@@ -208,7 +238,7 @@ class SavePreviewDialog(QDialog):
     def _build_items(self, classes):
         for pos, idx in enumerate(sorted(self.frame_boxes)):
             n_boxes = len(self.frame_boxes[idx])
-            item = PreviewItem(idx, self._caption(idx), n_boxes)
+            item = PreviewItem(idx, self._caption(idx), n_boxes, self.shape_word)
             item.check.toggled.connect(self._update_count)
             self.grid.addWidget(item, pos // COLUMNS, pos % COLUMNS)
             self.items[idx] = item
@@ -223,6 +253,7 @@ class SavePreviewDialog(QDialog):
             source_type=self.source_type,
             video_path=video_path,
             image_paths=self.image_paths,
+            shape_type=self.shape_type,
         )
         self.loader.thumb_ready.connect(self._on_thumb)
         self.loader.progress_signal.connect(self._on_progress)

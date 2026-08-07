@@ -8,7 +8,8 @@ from utils.resize_worker import BatchResizeWorker
 
 
 class BatchResizeDialog(QDialog):
-    """kind: 'detection' (images/ + labels/, boxes get remapped) or
+    """kind: 'detection' (images/ + labels/, boxes get remapped),
+    'segmentation' (same layout, polygon points get remapped) or
     'classification' (per-class subfolders, no labels to remap)."""
 
     def __init__(self, parent, kind, dataset_dir):
@@ -61,6 +62,11 @@ class BatchResizeDialog(QDialog):
             note_text = (
                 "หมายเหตุ: ไฟล์ label (.txt) จะถูกคำนวณพิกัดกรอบใหม่ให้ตรงกับภาพที่ resize แล้วโดยอัตโนมัติ "
                 "(ทั้ง 2 โหมด) — ไม่ต้องแก้ label เอง"
+            )
+        elif self.kind == "segmentation":
+            note_text = (
+                "หมายเหตุ: จุดของ polygon ทุกจุดจะถูกคำนวณใหม่ให้ตรงกับภาพที่ resize แล้วโดยอัตโนมัติ "
+                "— ไม่ต้องแก้ label เอง"
             )
         else:
             note_text = "โครงสร้างโฟลเดอร์ย่อยตามชื่อคลาสจะถูกคงไว้เหมือนเดิม"

@@ -2,6 +2,7 @@ import os
 import shutil
 
 from utils.train_val_split import collect_detect_pairs
+from utils.yolo_format import read_yolo_seg_label
 import cv2
 import numpy as np
 
@@ -119,6 +120,86 @@ def resize_detection_dataset(dataset_dir, target_w, target_h, mode="letterbox",
                         new_lines_list.append(
                             f"{class_id} {new_xc:.6f} {new_yc:.6f} {new_bw:.6f} {new_bh:.6f}"
                         )
+            new_lines = "\n".join(new_lines_list)
+
+        cv2.imwrite(os.path.join(dst_images_dir, fname), new_img)
+        if new_lines is not None:
+            with open(os.path.join(dst_labels_dir, base + ".txt"), "w", encoding="utf-8") as f:
+                f.write(new_lines)
+
+        count += 1
+        if progress_callback:
+            progress_callback(i + 1, total)
+
+    return count, out_images_dir, out_labels_dir
+
+
+def resize_segmentation_dataset(dataset_dir, target_w, target_h, mode="letterbox",
+                                 output_dir=None, overwrite=False, progress_callback=None):
+    """เหมือน resize_detection_dataset แต่ label เป็น polygon แบบ YOLO-seg
+
+    โหมด stretch: พิกัดที่ normalize แล้วไม่เปลี่ยน (แต่ละแกนคิดเทียบกับด้าน
+      ของตัวเองอยู่แล้ว) จึงคัดลอกไฟล์ label เดิมได้เลย
+    โหมด letterbox: ต้องคำนวณจุดทุกจุดใหม่ตาม scale และขอบที่เติมเข้ามา
+
+    Returns: (num_images_processed, out_images_dir, out_labels_dir)
+    """
+    pairs = collect_detect_pairs(dataset_dir)
+    if not pairs:
+        raise FileNotFoundError(
+            "ไม่พบภาพใน dataset ที่เลือก (ควรมี images/ หรือ train/images + val/images)"
+        )
+
+    if output_dir is None:
+        output_dir = dataset_dir if overwrite else os.path.join(
+            dataset_dir, f"resized_{target_w}x{target_h}"
+        )
+    out_images_dir = os.path.join(output_dir, "images")
+    out_labels_dir = os.path.join(output_dir, "labels")
+    os.makedirs(output_dir, exist_ok=True)
+
+    for fname in ("classes.txt", "data.yaml"):
+        src = os.path.join(dataset_dir, fname)
+        if os.path.isfile(src) and os.path.abspath(output_dir) != os.path.abspath(dataset_dir):
+            shutil.copy2(src, os.path.join(output_dir, fname))
+
+    stems = sorted(pairs)
+    total = len(stems)
+    count = 0
+
+    for i, stem in enumerate(stems):
+        img_path, label_path = pairs[stem]
+        img = cv2.imread(img_path)
+        if img is None:
+            if progress_callback:
+                progress_callback(i + 1, total)
+            continue
+        h, w = img.shape[:2]
+        fname = os.path.basename(img_path)
+        base = os.path.splitext(fname)[0]
+
+        rel_img_dir = os.path.relpath(os.path.dirname(img_path), dataset_dir)
+        sub = os.path.dirname(rel_img_dir)
+        dst_images_dir = os.path.join(output_dir, sub, "images")
+        dst_labels_dir = os.path.join(output_dir, sub, "labels")
+        os.makedirs(dst_images_dir, exist_ok=True)
+        os.makedirs(dst_labels_dir, exist_ok=True)
+
+        if mode == "stretch":
+            new_img = _resize_stretch(img, target_w, target_h)
+            new_lines = None
+            if label_path and os.path.isfile(label_path):
+                with open(label_path, "r", encoding="utf-8") as f:
+                    new_lines = f.read()
+        else:  # letterbox
+            new_img, scale, pad_x, pad_y = _resize_letterbox(img, target_w, target_h)
+            new_lines_list = []
+            for class_id, points in read_yolo_seg_label(label_path or "", w, h):
+                coords = []
+                for px, py in points:
+                    coords.append(f"{(px * scale + pad_x) / target_w:.6f}")
+                    coords.append(f"{(py * scale + pad_y) / target_h:.6f}")
+                new_lines_list.append(f"{class_id} " + " ".join(coords))
             new_lines = "\n".join(new_lines_list)
 
         cv2.imwrite(os.path.join(dst_images_dir, fname), new_img)

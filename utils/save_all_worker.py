@@ -3,7 +3,7 @@ import os
 import cv2
 from PyQt5.QtCore import QThread, pyqtSignal
 
-from utils.yolo_format import save_yolo_label
+from utils.yolo_format import save_yolo_label, save_yolo_seg_label
 
 
 class SaveAllWorker(QThread):
@@ -20,8 +20,10 @@ class SaveAllWorker(QThread):
     finished_signal = pyqtSignal(bool, str, int)  # (success, message, saved_count)
 
     def __init__(self, frame_boxes, images_dir, labels_dir,
-                 source_type="video", video_path=None, image_paths=None):
+                 source_type="video", video_path=None, image_paths=None,
+                 label_kind="detect"):
         super().__init__()
+        self.label_kind = label_kind  # "detect" (กรอบ) หรือ "segment" (polygon)
         # copy กันไว้ ป้องกันกรณีผู้ใช้แก้ label ต่อระหว่างที่กำลังบันทึก
         self.frame_boxes = {idx: list(boxes) for idx, boxes in frame_boxes.items()}
         self.images_dir = images_dir
@@ -80,10 +82,14 @@ class SaveAllWorker(QThread):
             base = self._base_name(idx)
             try:
                 cv2.imwrite(os.path.join(self.images_dir, base + ".jpg"), frame)
-                save_yolo_label(
-                    os.path.join(self.labels_dir, base + ".txt"),
-                    self.frame_boxes[idx], w, h,
-                )
+                label_path = os.path.join(self.labels_dir, base + ".txt")
+                if self.label_kind == "segment":
+                    polygons = [
+                        (p["class_id"], p["points"]) for p in self.frame_boxes[idx]
+                    ]
+                    save_yolo_seg_label(label_path, polygons, w, h)
+                else:
+                    save_yolo_label(label_path, self.frame_boxes[idx], w, h)
                 saved += 1
             except Exception as e:  # noqa: BLE001
                 failed += 1
