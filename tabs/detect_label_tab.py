@@ -3,7 +3,7 @@ import cv2
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QSpinBox,
     QDoubleSpinBox, QListWidget, QFileDialog, QMessageBox, QInputDialog, QLineEdit,
-    QGroupBox, QCheckBox, QProgressBar, QShortcut
+    QGroupBox, QCheckBox, QProgressBar, QShortcut, QDialog
 )
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtCore import Qt
@@ -16,6 +16,8 @@ from utils.train_val_split import (
 )
 from utils.coco_format import yolo_dataset_to_coco
 from utils.auto_label import AutoLabelWorker
+from utils.save_all_worker import SaveAllWorker
+from widgets.save_preview_dialog import SavePreviewDialog
 
 COLORS = [
     (231, 76, 60), (46, 204, 113), (52, 152, 219), (241, 196, 15),
@@ -44,6 +46,7 @@ class DetectLabelTab(QWidget):
         self._cached_model = None
         self._cached_model_path = None
         self.auto_worker = None
+        self.save_all_worker = None
 
         self._build_ui()
 
@@ -204,6 +207,20 @@ class DetectLabelTab(QWidget):
         save_btn = QPushButton("💾 บันทึกภาพ + label (เฟรมนี้)")
         save_btn.clicked.connect(self.save_current_label)
         out_layout.addWidget(save_btn)
+
+        save_all_bar = QHBoxLayout()
+        self.save_all_btn = QPushButton("🖼 เลือกรูปที่จะบันทึก (preview)")
+        self.save_all_btn.clicked.connect(self.save_all_labels)
+        save_all_bar.addWidget(self.save_all_btn, stretch=1)
+        self.save_all_stop_btn = QPushButton("หยุด")
+        self.save_all_stop_btn.setEnabled(False)
+        self.save_all_stop_btn.clicked.connect(self.stop_save_all)
+        save_all_bar.addWidget(self.save_all_stop_btn)
+        out_layout.addLayout(save_all_bar)
+
+        self.save_all_progress = QProgressBar()
+        self.save_all_progress.setValue(0)
+        out_layout.addWidget(self.save_all_progress)
 
         export_coco_btn = QPushButton("📦 Export เป็น COCO format")
         export_coco_btn.clicked.connect(self.export_coco)
@@ -634,6 +651,96 @@ class DetectLabelTab(QWidget):
 
         if self.auto_next_check.isChecked():
             self.next_frame()
+
+    def save_all_labels(self):
+        """บันทึกภาพ + label ของทุกเฟรมที่ label ไว้แล้วในครั้งเดียว
+        (ใช้ต่อจาก 'Auto-label เฟรมที่เหลือทั้งหมด' จะได้ไม่ต้องกดบันทึกทีละเฟรม)"""
+        if not self.classes:
+            QMessageBox.warning(self, "แจ้งเตือน", "กรุณาเพิ่มคลาสก่อน")
+            return
+        if self.source_mode == "video" and not self.video_path:
+            QMessageBox.warning(self, "แจ้งเตือน", "กรุณาโหลดวิดีโอก่อน")
+            return
+        if self.source_mode == "images" and not self.image_paths:
+            QMessageBox.warning(self, "แจ้งเตือน", "กรุณาโหลดรูปภาพก่อน")
+            return
+        if self.save_all_worker and self.save_all_worker.isRunning():
+            QMessageBox.information(self, "แจ้งเตือน", "กำลังบันทึกอยู่ กรุณารอให้เสร็จ หรือกดหยุดก่อน")
+            return
+        if self.auto_worker and self.auto_worker.isRunning():
+            QMessageBox.information(
+                self, "แจ้งเตือน",
+                "กำลัง auto-label อยู่ กรุณารอให้เสร็จก่อนจึงบันทึกทั้งหมด"
+            )
+            return
+
+        if not self.frame_boxes:
+            QMessageBox.warning(self, "แจ้งเตือน", "ยังไม่มีเฟรมที่ label ไว้")
+            return
+
+        # เปิดหน้าต่าง preview ให้ผู้ใช้ติ๊กเลือกเองว่าจะบันทึกรูปไหน
+        dialog = SavePreviewDialog(
+            self,
+            frame_boxes=self.frame_boxes,
+            classes=self.classes,
+            colors=COLORS,
+            source_type=self.source_mode,
+            video_path=self.video_path,
+            image_paths=self.image_paths,
+        )
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        selected = dialog.selected_indices()
+        if not selected:
+            return
+        to_save = {idx: self.frame_boxes.get(idx, []) for idx in selected}
+
+        output_dir = self.out_dir_edit.text()
+        self.save_all_progress.setMaximum(len(to_save))
+        self.save_all_progress.setValue(0)
+        self.save_all_btn.setEnabled(False)
+        self.save_all_stop_btn.setEnabled(True)
+
+        self.save_all_worker = SaveAllWorker(
+            frame_boxes=to_save,
+            images_dir=os.path.join(output_dir, "images"),
+            labels_dir=os.path.join(output_dir, "labels"),
+            source_type=self.source_mode,
+            video_path=self.video_path,
+            image_paths=self.image_paths,
+        )
+        self.save_all_worker.progress_signal.connect(self.on_save_all_progress)
+        self.save_all_worker.log_signal.connect(lambda m: self.split_status_label.setText(m))
+        self.save_all_worker.finished_signal.connect(self.on_save_all_finished)
+        self.save_all_worker.start()
+
+    def stop_save_all(self):
+        if self.save_all_worker:
+            self.save_all_worker.stop()
+
+    def on_save_all_progress(self, done, total):
+        self.save_all_progress.setMaximum(max(1, total))
+        self.save_all_progress.setValue(done)
+
+    def on_save_all_finished(self, success, message, saved_count):
+        self.save_all_btn.setEnabled(True)
+        self.save_all_stop_btn.setEnabled(False)
+
+        if success and saved_count:
+            # เขียน classes.txt / data.yaml จากฝั่ง GUI หลังไฟล์ภาพถูกบันทึกครบแล้ว
+            output_dir = self.out_dir_edit.text()
+            save_classes_file(os.path.join(output_dir, "classes.txt"), self.classes)
+            save_data_yaml(
+                os.path.join(output_dir, "data.yaml"), output_dir, self.classes,
+                split=is_detect_split(output_dir),
+            )
+
+        self.refresh_split_status()
+        if success:
+            QMessageBox.information(self, "สำเร็จ", message)
+        else:
+            QMessageBox.warning(self, "ผิดพลาด", message)
 
     def refresh_split_status(self):
         """อัปเดตข้อความสรุปสถานะการแยก train/val ของ dataset ปัจจุบัน"""
