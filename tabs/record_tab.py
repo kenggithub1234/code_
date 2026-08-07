@@ -9,6 +9,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 
+from utils.camera_open_worker import CameraOpenWorker, is_ip_source, mask_credentials
+
 # Silence OpenCV's internal logging (e.g. the harmless
 # "obsensor_uvc_stream_channel ... Camera index out of range" message that
 # is printed while probing camera indices that don't exist).
@@ -95,6 +97,7 @@ class RecordTab(QWidget):
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
+        self.connect_worker = None
 
         self._build_ui()
         self._refresh_cameras()
@@ -103,19 +106,50 @@ class RecordTab(QWidget):
         layout = QVBoxLayout(self)
 
         top_bar = QHBoxLayout()
-        top_bar.addWidget(QLabel("กล้อง:"))
+        top_bar.addWidget(QLabel("ประเภทกล้อง:"))
+        self.source_combo = QComboBox()
+        self.source_combo.addItems(["กล้อง USB", "IP camera (RTSP/HTTP)"])
+        self.source_combo.currentIndexChanged.connect(self.on_source_kind_changed)
+        top_bar.addWidget(self.source_combo)
+
+        self.camera_label = QLabel("กล้อง:")
+        top_bar.addWidget(self.camera_label)
         self.camera_combo = QComboBox()
         top_bar.addWidget(self.camera_combo)
 
-        refresh_btn = QPushButton("รีเฟรชรายการกล้อง")
-        refresh_btn.clicked.connect(self._refresh_cameras)
-        top_bar.addWidget(refresh_btn)
+        self.refresh_btn = QPushButton("รีเฟรชรายการกล้อง")
+        self.refresh_btn.clicked.connect(self._refresh_cameras)
+        top_bar.addWidget(self.refresh_btn)
 
-        open_btn = QPushButton("เปิดกล้อง / พรีวิว")
-        open_btn.clicked.connect(self.open_camera)
-        top_bar.addWidget(open_btn)
+        self.open_btn = QPushButton("เปิดกล้อง / พรีวิว")
+        self.open_btn.clicked.connect(self.open_camera)
+        top_bar.addWidget(self.open_btn)
         top_bar.addStretch()
         layout.addLayout(top_bar)
+
+        # ---- แถว URL สำหรับ IP camera (ซ่อนไว้เมื่อเลือกกล้อง USB) ----
+        self.ip_bar_widget = QWidget()
+        ip_bar = QHBoxLayout(self.ip_bar_widget)
+        ip_bar.setContentsMargins(0, 0, 0, 0)
+        ip_bar.addWidget(QLabel("URL:"))
+        self.ip_url_edit = QLineEdit()
+        self.ip_url_edit.setPlaceholderText(
+            "rtsp://user:pass@192.168.1.10:554/stream1   |   "
+            "rtsp://user:pass@192.168.1.10:554/user=admin&password=xxxx&channel=1&stream=0.sdp"
+        )
+        ip_bar.addWidget(self.ip_url_edit)
+        layout.addWidget(self.ip_bar_widget)
+
+        self.ip_hint = QLabel(
+            "ตัวอย่าง path ตามยี่ห้อ — Hikvision: /Streaming/Channels/101 | "
+            "Dahua: /cam/realmonitor?channel=1&subtype=0 | TP-Link: /stream1 | "
+            "ONVIF ทั่วไป: /onvif1 | "
+            "XM/Xiongmai: /user=admin&password=xxxx&channel=1&stream=0.sdp\n"
+            "(บังคับใช้ RTSP over TCP ให้อัตโนมัติแล้ว รหัสผ่านจะถูกซ่อนในข้อความแจ้งเตือน)"
+        )
+        self.ip_hint.setWordWrap(True)
+        self.ip_hint.setStyleSheet("color:#9ecbff;")
+        layout.addWidget(self.ip_hint)
 
         res_bar = QHBoxLayout()
         res_bar.addWidget(QLabel("ความละเอียด:"))
@@ -148,6 +182,18 @@ class RecordTab(QWidget):
         apply_res_btn = QPushButton("ใช้ความละเอียดนี้")
         apply_res_btn.clicked.connect(self.apply_resolution)
         res_bar.addWidget(apply_res_btn)
+
+        res_bar.addWidget(QLabel("FPS ที่ใช้บันทึก:"))
+        self.fps_spin = QSpinBox()
+        self.fps_spin.setRange(0, 120)
+        self.fps_spin.setValue(0)
+        self.fps_spin.setSpecialValueText("อัตโนมัติ")
+        self.fps_spin.setToolTip(
+            "IP camera มักรายงานค่า FPS ไม่ตรงความจริง (คืน 0 หรือ 90000) "
+            "ทำให้วิดีโอที่อัดได้เร็วหรือช้าผิดปกติ\n"
+            "ถ้าเจออาการนั้น ให้ใส่ค่า FPS จริงของกล้องตรงนี้"
+        )
+        res_bar.addWidget(self.fps_spin)
         res_bar.addStretch()
         layout.addLayout(res_bar)
 
@@ -196,6 +242,10 @@ class RecordTab(QWidget):
         ctrl_bar.addStretch()
         layout.addLayout(ctrl_bar)
 
+        # ค่าเริ่มต้นเป็นกล้อง USB จึงต้องซ่อนแถว IP ไว้ก่อน
+        # (currentIndexChanged ไม่ยิงเองตอนสร้าง UI)
+        self.on_source_kind_changed(0)
+
     def _refresh_cameras(self):
         self.camera_combo.clear()
         found = []
@@ -223,30 +273,71 @@ class RecordTab(QWidget):
             self.save_dir = folder
             self.path_edit.setText(folder)
 
+    def current_source(self):
+        """คืนค่าแหล่งภาพปัจจุบัน: int (USB index) หรือ str (URL ของ IP camera)"""
+        if self.source_combo.currentIndex() == 1:
+            return self.ip_url_edit.text().strip()
+        index = self.camera_combo.currentData()
+        return 0 if index is None else index
+
+    def on_source_kind_changed(self, _index):
+        is_ip = self.source_combo.currentIndex() == 1
+        self.ip_bar_widget.setVisible(is_ip)
+        self.ip_hint.setVisible(is_ip)
+        self.camera_label.setVisible(not is_ip)
+        self.camera_combo.setVisible(not is_ip)
+        self.refresh_btn.setVisible(not is_ip)
+
     def open_camera(self):
+        source = self.current_source()
+        if self.source_combo.currentIndex() == 1:
+            if not source:
+                QMessageBox.warning(self, "แจ้งเตือน", "กรุณากรอก URL ของ IP camera ก่อน")
+                return
+            if not is_ip_source(source):
+                QMessageBox.warning(
+                    self, "แจ้งเตือน",
+                    "URL ต้องขึ้นต้นด้วย rtsp:// หรือ http:// เช่น\n"
+                    "rtsp://user:pass@192.168.1.10:554/stream1"
+                )
+                return
+
+        # ปิดตัวเดิมก่อน แล้วยกเลิกการเชื่อมต่อที่ค้างอยู่ (ถ้ามี)
+        if self.timer.isActive():
+            self.timer.stop()
         if self.cap:
             self.cap.release()
             self.cap = None
-        index = self.camera_combo.currentData()
-        if index is None:
-            index = 0
+        if self.connect_worker and self.connect_worker.isRunning():
+            self.connect_worker.cancel()
 
-        self.preview.setText("กำลังเชื่อมต่อกล้อง...")
-        cap, backend = _open_and_verify_camera(index)
+        self.open_btn.setEnabled(False)
+        shown = mask_credentials(source) if isinstance(source, str) else f"กล้อง {source}"
+        self.preview.setText(f"กำลังเชื่อมต่อ...\n{shown}")
+
+        self.connect_worker = CameraOpenWorker(source)
+        self.connect_worker.opened.connect(self.on_camera_opened)
+        self.connect_worker.start()
+
+    def on_camera_opened(self, cap, err):
+        self.open_btn.setEnabled(True)
         if cap is None:
             self._read_fail_count = 0
-            QMessageBox.warning(
-                self,
-                "ไม่มีสัญญาณภาพ",
-                "เปิดกล้องได้ (หรือเปิดไม่ได้เลย) แต่ไม่ได้รับภาพจากกล้อง สาเหตุที่เป็นไปได้:\n\n"
-                "1. กล้องกำลังถูกใช้งานโดยโปรแกรมอื่นอยู่ (Zoom, Teams, เบราว์เซอร์, กล้องในตัวเครื่อง) "
-                "ให้ปิดโปรแกรมเหล่านั้นก่อนแล้วลองใหม่\n"
-                "2. ยังไม่ได้อนุญาตสิทธิ์กล้องให้ Python/Terminal\n"
-                "   - macOS: System Settings > Privacy & Security > Camera > เปิดสิทธิ์ให้ Terminal/python\n"
-                "   - Windows: Settings > Privacy & security > Camera > อนุญาตแอปเดสก์ท็อปเข้าถึงกล้อง\n"
-                "3. เลือกกล้องผิดตัวในช่อง 'กล้อง' ลองกด 'รีเฟรชรายการกล้อง' แล้วเลือกตัวอื่น\n"
-                "4. ไดรเวอร์กล้อง USB มีปัญหา ลองถอดปลั๊กแล้วเสียบใหม่",
-            )
+            if err == "usb-no-signal":
+                QMessageBox.warning(
+                    self,
+                    "ไม่มีสัญญาณภาพ",
+                    "เปิดกล้องได้ (หรือเปิดไม่ได้เลย) แต่ไม่ได้รับภาพจากกล้อง สาเหตุที่เป็นไปได้:\n\n"
+                    "1. กล้องกำลังถูกใช้งานโดยโปรแกรมอื่นอยู่ (Zoom, Teams, เบราว์เซอร์, กล้องในตัวเครื่อง) "
+                    "ให้ปิดโปรแกรมเหล่านั้นก่อนแล้วลองใหม่\n"
+                    "2. ยังไม่ได้อนุญาตสิทธิ์กล้องให้ Python/Terminal\n"
+                    "   - macOS: System Settings > Privacy & Security > Camera > เปิดสิทธิ์ให้ Terminal/python\n"
+                    "   - Windows: Settings > Privacy & security > Camera > อนุญาตแอปเดสก์ท็อปเข้าถึงกล้อง\n"
+                    "3. เลือกกล้องผิดตัวในช่อง 'กล้อง' ลองกด 'รีเฟรชรายการกล้อง' แล้วเลือกตัวอื่น\n"
+                    "4. ไดรเวอร์กล้อง USB มีปัญหา ลองถอดปลั๊กแล้วเสียบใหม่",
+                )
+            else:
+                QMessageBox.warning(self, "เชื่อมต่อไม่สำเร็จ", err)
             self.preview.setText("ไม่มีสัญญาณภาพ - กด 'เปิดกล้อง / พรีวิว'")
             return
 
@@ -257,7 +348,9 @@ class RecordTab(QWidget):
 
         # Re-apply any resolution the user had already selected (other than
         # the "camera default" option) so it survives re-opening the camera.
-        if self.resolution_combo.currentText() != "ค่าเริ่มต้นกล้อง":
+        # IP camera ส่วนใหญ่ไม่รับคำสั่งนี้ ต้องไปตั้งความละเอียดที่หน้าเว็บของกล้องแทน
+        if (self.source_combo.currentIndex() == 0
+                and self.resolution_combo.currentText() != "ค่าเริ่มต้นกล้อง"):
             self._set_capture_resolution(self.width_spin.value(), self.height_spin.value())
 
     def on_resolution_preset_changed(self, _index):
@@ -381,9 +474,13 @@ class RecordTab(QWidget):
                 return
         w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 640
         h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
-        fps = self.cap.get(cv2.CAP_PROP_FPS)
-        if not fps or fps <= 1:
-            fps = 20.0
+        fps = float(self.fps_spin.value())
+        if fps <= 0:
+            fps = self.cap.get(cv2.CAP_PROP_FPS)
+            # IP camera มักคืนค่าเพี้ยน (0 หรือ 90000 ซึ่งเป็น time base ของ RTSP)
+            # ถ้าใช้ค่านั้นตรงๆ ไฟล์ที่อัดจะเร็ว/ช้าผิดความจริงอย่างแรง
+            if not fps or fps <= 1 or fps > 120:
+                fps = 20.0
 
         save_dir = self.path_edit.text()
         os.makedirs(save_dir, exist_ok=True)

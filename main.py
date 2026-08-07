@@ -1,6 +1,10 @@
 import os
 import sys
 
+# ต้องตั้งก่อนที่ OpenCV จะสร้าง VideoCapture ตัวแรก: บังคับให้ RTSP วิ่งบน TCP
+# (ค่าเริ่มต้นเป็น UDP ซึ่งภาพจะแตกเป็นบล็อกๆ บ่อยมากเมื่อเน็ตไม่นิ่ง)
+os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+
 # Must happen before PyQt5 is imported: on Windows, once PyQt5's QApplication
 # has loaded its native Qt runtime, TensorFlow's own native DLL init
 # (_pywrap_tensorflow_internal) reliably fails with a DLL initialization
