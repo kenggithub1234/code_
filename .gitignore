@@ -13,3 +13,8 @@ run_stderr.log
 # Training run outputs / model weights (large binaries, not source)
 /runs/
 /runs_keras/
+
+# PyInstaller build artifacts
+/build/
+/dist/
+*.spec.bak
